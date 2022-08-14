@@ -3,3 +3,10 @@
 *.out
 *.DS_Store
 05/*.hack
+06/add/Add.asm
+06/max/Max.asm
+06/max/MaxL.asm
+06/pong/Pong.asm
+06/pong/PongL.asm
+06/*/*.asm
+06/*/*.hack
