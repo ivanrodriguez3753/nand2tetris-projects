@@ -10,9 +10,9 @@
 06/pong/PongL.asm
 06/*/*.asm
 06/*/*.hack
-# 07/*/*/*.vm
-# 07/*/*/*.asm
-
-# #vm executable
-# 07/vm
+07/*/*/*.vm
+07/*/*/*.tst
+07/*/*/*.asm
+07/*/*/*.html
+07/vm
 

@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <fstream>
 #include <sstream>
+#include <map>
 
 using namespace std;
 
@@ -12,6 +13,15 @@ vector<vector<string> > current_stripped_input;
 vector<string> hack_output;
 ifstream current_ifs;
 int label_counter = 0;
+
+map<string, string> seg_to_symbol = {{"local", "LCL"},
+                                     {"argument", "ARG"},
+                                     {"this", "THIS"},
+                                     {"that", "THAT"},
+                                     {"temp", "5"}, //temp starts at R5
+                                     {"pointer", "3"}, //pointer is R3-R4
+                                     {"static", "16"}
+                                    };
 
 /**Assume that inline comments are allowed, but they will be 
  * separated out by a space. For example, 
@@ -125,7 +135,7 @@ bool valid_commandline_invocation(int argc, char** argv) {
 
 
 void process_arith(const string& command) {
-    //temp segment is R5-R12, so just use R5 and R6
+    //true temp segment is R13-R15
     if(command == "add") {
         hack_output.push_back("@SP");   
         hack_output.push_back("D=M");   
@@ -133,7 +143,7 @@ void process_arith(const string& command) {
         hack_output.push_back("A=D");
         hack_output.push_back("D=M");
 
-        hack_output.push_back("@R5");   
+        hack_output.push_back("@R13");   
         hack_output.push_back("M=D");
 
         hack_output.push_back("@SP");
@@ -143,7 +153,7 @@ void process_arith(const string& command) {
         hack_output.push_back("A=D");
         hack_output.push_back("D=M");
 
-        hack_output.push_back("@R5");
+        hack_output.push_back("@R13");
         hack_output.push_back("D=D+M");
 
         hack_output.push_back("@SP");
@@ -162,7 +172,7 @@ void process_arith(const string& command) {
         hack_output.push_back("A=D");
         hack_output.push_back("D=M");
 
-        hack_output.push_back("@R5"); 
+        hack_output.push_back("@R13"); 
         hack_output.push_back("M=D");
 
         hack_output.push_back("@SP");
@@ -172,7 +182,7 @@ void process_arith(const string& command) {
         hack_output.push_back("A=D");
         hack_output.push_back("D=M");
 
-        hack_output.push_back("@R5");
+        hack_output.push_back("@R13");
         hack_output.push_back("D=D-M");
 
         hack_output.push_back("@SP");
@@ -312,19 +322,84 @@ void process_arith(const string& command) {
     }
 }
 
-void process_mem_access(const string& segment, const string& index) {
-    if(segment == "constant") {
-        hack_output.push_back("//START push " + segment + " " + index);
-        hack_output.push_back("@" + index); //@index A gets index, M gets RAM[100] (irrelevant). index is int constant
-        hack_output.push_back("D=A");          //D=A D gets index
-        hack_output.push_back("@SP"); //A gets 0, M gets 256 (or current SP)
-        hack_output.push_back("A=M"); //A=M A gets 256, M gets RAM[256]
-        hack_output.push_back("M=D");  //RAM[256] gets index
-        //increment stack pointer
+void process_mem_access(const string& command, const string& segment, const string& index) {
+    
+    /**push segment index: Push the value of segment[index] onto the stack
+     * pop  segment index: Pop the top stack value and store it in segment[index].
+     * we can actually just expect the read/write address to be in D, then 
+     * read/write on that address based on the value of command (push/pop). This way we don't
+     * write duplicate source code for parallel push/pop subpaths
+     * Note that constants will be provided as addresses, since it is an emulated virtual segment
+     *  */
+    if( (segment == "local") || 
+        (segment == "argument") || 
+        (segment == "this") || 
+        (segment == "that") ||
+        (segment == "temp") ||
+        (segment == "pointer") ||
+        (segment == "static") ) {
+        hack_output.push_back("@" + seg_to_symbol.at(segment));
+        if(segment == "temp" || segment == "pointer" || segment == "static") {
+            hack_output.push_back("D=A");
+        }
+        else {
+            hack_output.push_back("D=M");
+        }
+        hack_output.push_back("@" + index);
+        hack_output.push_back("D=D+A");
+    }
+    //since constant is the only 'true' virtual segment, in that the vm translator provides
+    //the values instead of it being read from somewhere in global ram, we do the handling here
+    //and skip the 'reading' step of if(push) in the if(push)elseif(pop) below this set of ifs
+    else if(segment == "constant") {
+        hack_output.push_back("@" + index); 
+
+        //special case code is written below this comment
+        //normally we'd read from A, in the read step below, then push to stack
+        //we can't read a constant from RAM, the implementation (this code, through `index`) provides it 
+        hack_output.push_back("D=A");    
+        hack_output.push_back("@SP"); 
+        hack_output.push_back("A=M"); 
+        hack_output.push_back("M=D");  
+    }
+    
+
+    //for push, read address D and write that to the stack. Then increment SP
+    if(command == "push") {
+        //read step: constant was handled specially, so skip if segment == constant
+        //read the value in D
+        if(segment != "constant") {
+            //copy D to A, then read into D. so essentially D = *D, but you can only deref A (with M)
+            //Then write that to stack
+            hack_output.push_back("A=D");
+            hack_output.push_back("D=M");
+            hack_output.push_back("@SP");
+            hack_output.push_back("A=M");
+            hack_output.push_back("M=D");
+        }
+
+        //increment step: increment SP
         hack_output.push_back("@SP"); //A gets 0, M gets 256
         hack_output.push_back("M=M+1"); //RAM[256] gets incremented
-        hack_output.push_back("//END push " + segment + " " + index);
     }
+    //for pop, pop stack and write to address in D. Then decrement SP
+    else if(command == "pop") {
+        //save D in a temp register
+        hack_output.push_back("@R13");
+        hack_output.push_back("M=D");
+
+        hack_output.push_back("@SP");
+        hack_output.push_back("A=M-1");
+        hack_output.push_back("D=M");
+
+        hack_output.push_back("@R13");
+        hack_output.push_back("A=M");
+        hack_output.push_back("M=D");
+
+        hack_output.push_back("@SP");
+        hack_output.push_back("M=M-1");
+    }
+
 }
 
 void process_program_flow() {
@@ -351,7 +426,7 @@ void translate_stripped_input() {
             process_arith(command);
         }
         else if((command == "push") || (command == "pop")) {
-            process_mem_access(current_stripped_input[i][1], current_stripped_input[i][2]);
+            process_mem_access(command, current_stripped_input[i][1], current_stripped_input[i][2]);
         }
         else if((command == "label") || (command == "goto") || (command == "if-goto")) {
             //TODO: NOT SUPPORTED YET
