@@ -476,6 +476,80 @@ void process_function_calling(const vector<string>& line) {
         const string& f = line.at(1);
         const string& m = line.at(2);
 
+        string label = current_vm_function + "$" + "ret_from_" + f + to_string(label_counter++);
+        //push return-address
+        hack_output.push_back("@" + label);
+        hack_output.push_back("D=A");
+
+        hack_output.push_back("@SP");
+        hack_output.push_back("A=M");
+        hack_output.push_back("M=D");
+        hack_output.push_back("@SP");
+        hack_output.push_back("M=M+1");
+
+        //push LCL
+        hack_output.push_back("@LCL");
+        hack_output.push_back("D=M");
+
+        hack_output.push_back("@SP");
+        hack_output.push_back("A=M");
+        hack_output.push_back("M=D");
+        hack_output.push_back("@SP");
+        hack_output.push_back("M=M+1");
+
+        //push ARG
+        hack_output.push_back("@ARG");
+        hack_output.push_back("D=M");
+
+        hack_output.push_back("@SP");
+        hack_output.push_back("A=M");
+        hack_output.push_back("M=D");
+        hack_output.push_back("@SP");
+        hack_output.push_back("M=M+1");
+
+        //push THIS
+        hack_output.push_back("@THIS");
+        hack_output.push_back("D=M");
+
+        hack_output.push_back("@SP");
+        hack_output.push_back("A=M");
+        hack_output.push_back("M=D");
+        hack_output.push_back("@SP");
+        hack_output.push_back("M=M+1");
+
+        //push THAT
+        hack_output.push_back("@THAT");
+        hack_output.push_back("D=M");
+
+        hack_output.push_back("@SP");
+        hack_output.push_back("A=M");
+        hack_output.push_back("M=D");
+        hack_output.push_back("@SP");
+        hack_output.push_back("M=M+1");
+
+        //ARG=SP-n-5
+        //We can add n+5 then do SP-(m+5)
+        hack_output.push_back("@" + m);
+        hack_output.push_back("D=A");
+        hack_output.push_back("@5");
+        hack_output.push_back("D=D+A"); //D has m+5
+        hack_output.push_back("@SP");
+        hack_output.push_back("D=M-D"); //D has SP-(m+5)
+        hack_output.push_back("@ARG");
+        hack_output.push_back("M=D");
+
+        //LCL=SP
+        hack_output.push_back("@SP");
+        hack_output.push_back("D=M");
+        hack_output.push_back("@LCL");
+        hack_output.push_back("M=D");
+
+        //goto f
+        hack_output.push_back("@" + f);
+        hack_output.push_back("0;JMP");
+
+        //(return-address)
+        hack_output.push_back("(" + label + ")");
     }
     else if(command == "return") {
         //page 193, figure 8.5
@@ -589,11 +663,28 @@ void process_function_calling(const vector<string>& line) {
 }
 
 void write_bootstrap_code() {
-    //TODO in chapter 8, write this code to initialize SP, among other things
+    //on page 194, we just have to effect the following operations:
+    //SP=256            //Initialize the stack pointer to 0x100
+    //call Sys.init     //Start executing (the translated code of) Sys.init
+    
+    if(hack_output.size() != 0) {
+        cout << "bootstrap code must start at ROM[0]\n";
+        exit(1);
+    }
+    //SP=256
+    hack_output.push_back("@256");
+    hack_output.push_back("D=A");
+    hack_output.push_back("@SP");
+    hack_output.push_back("M=D");
+
+    //call Sys.init
+    // hack_output.push_back("@Sys.init");
+    // hack_output.push_back("0;JMP");
+    const vector<string> bootstrap_call{"call", "Sys.init", "0"};
+    process_function_calling(bootstrap_call);
 }
 
 void translate_stripped_input() {
-    write_bootstrap_code();
     for(int i = 0; i < current_stripped_input.size(); i++) {
         //TODO delete this temp pushback
         string cur_line = "//BEGIN line [ ";
@@ -633,6 +724,9 @@ int main(int argc, char** argv) {
     }
     
 
+    //before translating a file at a time, write the bootstrap code
+    write_bootstrap_code();
+    
     //translate one file at a time
     for(int k = 0; k < vm_files.size(); k++) {
         strip_input(vm_files[k]);
