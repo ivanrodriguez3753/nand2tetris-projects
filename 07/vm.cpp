@@ -13,6 +13,7 @@ vector<vector<string> > current_stripped_input;
 vector<string> hack_output;
 ifstream current_ifs;
 int label_counter = 0;
+string current_vm_function = "null";
 
 map<string, string> seg_to_symbol = {{"local", "LCL"},
                                      {"argument", "ARG"},
@@ -322,11 +323,12 @@ void process_arith(const string& command) {
     }
 }
 
+/**push segment index: Push the value of segment[index] onto the stack
+ * pop  segment index: Pop the top stack value and store it in segment[index].
+ * */
 void process_mem_access(const string& command, const string& segment, const string& index) {
     
-    /**push segment index: Push the value of segment[index] onto the stack
-     * pop  segment index: Pop the top stack value and store it in segment[index].
-     * we can actually just expect the read/write address to be in D, then 
+    /**we can actually just expect the read/write address to be in D, then 
      * read/write on that address based on the value of command (push/pop). This way we don't
      * write duplicate source code for parallel push/pop subpaths
      * Note that constants will be provided as addresses, since it is an emulated virtual segment
@@ -402,12 +404,188 @@ void process_mem_access(const string& command, const string& segment, const stri
 
 }
 
-void process_program_flow() {
+/** label label: This command labels the current location in the function’s code.
+ *   goto label: This command effects an unconditional goto operation, causing execution to continue from
+ *      the location marked by the label. The jump destination must be located in the same function.
+ *if-goto label: This command effects a conditional goto operation. The stack’s topmost value is popped;
+ *      if the value is not zero, execution continues from the location marked by the label; otherwise, execution
+ *      continues from the next command in the program. The jump destination must be located in the same
+ *      function.
+ * */
+void process_program_flow(const string& command, const string& label) {
+    const string full_label = current_vm_function + "$" + label;
+    if(command == "label") {
+        //page 194, figure 8.6 says that every label should be 
+        //current_function + "$" + label
+        hack_output.push_back("(" + full_label + ")");
+    }
+    else if(command == "goto") {
+        hack_output.push_back("@" + full_label);
+        hack_output.push_back("0;JMP");
+    }
+    else if(command == "if-goto") {
+        hack_output.push_back("@SP");
+        hack_output.push_back("A=M");
+        hack_output.push_back("A=A-1");
+        hack_output.push_back("D=M");
+        hack_output.push_back("@SP");
+        hack_output.push_back("M=M-1");
 
+        hack_output.push_back("@" + full_label);
+        hack_output.push_back("D;JNE");
+    }
+    else {
+        cerr << "unsupported program flow command\n";
+    }
 }
 
-void process_function_calling() {
 
+/**function f n: Here starts the code of a function named f that has n local variables;
+ *     call f m: Call function f, stating that m arguments have already been pushed onto the stack by the caller;
+ *       return: Return to the calling function.
+ * //Note that we pass the whole vector line because the vm instruction formats differ
+ * */
+void process_function_calling(const vector<string>& line) {
+    const string& command = line.at(0);
+    if(command == "function") {
+        const string& f = line.at(1);
+        const string& n = line.at(2);
+
+        current_vm_function = f; 
+
+        hack_output.push_back("(" + f + ")");
+        //could do this in a .asm loop but just generate n 'push constant 0' instruction translations
+        int n_int = atoi(n.c_str());
+        
+        hack_output.push_back("@SP");
+        hack_output.push_back("A=M");
+        for(int i = 0; i < n_int; i++) {
+            hack_output.push_back("M=0");
+            hack_output.push_back("A=A+1");
+        }
+
+        //increment stack pointer with an addition
+        hack_output.push_back("@" + n);
+        hack_output.push_back("D=A");
+
+        hack_output.push_back("@SP");
+        hack_output.push_back("M=M+D");
+        
+    }
+    else if(command == "call") {
+        const string& f = line.at(1);
+        const string& m = line.at(2);
+
+    }
+    else if(command == "return") {
+        //page 193, figure 8.5
+        //use R13 for FRAME, use R14 for RET
+        //(in the pseudocode, FRAME and RET are temps)
+        //NOTE: the psuedocode is wrong as written. Need to add some implicit derefs
+        //For example, FRAME=LCL isn't really useful unless you assume that you really mean
+        //*FRAME = *LCL (since the symbol LCL is always 1)
+        /**
+         *FRAME=LCL
+         *  RET= *(FRAME-5)
+         * *ARG= pop()
+         *   SP=ARG+1
+         * THAT= *(FRAME-1)
+         * THIS= *(FRAME-2)
+         *  ARG= *(FRAME-3)
+         *  LCL= *(FRAME-4)
+         * goto RET
+         * */
+        hack_output.push_back("@LCL");
+        hack_output.push_back("D=M");
+
+        hack_output.push_back("@R13");
+        hack_output.push_back("M=D"); //*FRAME=*LCL
+
+        //D still has *LCL(==*FRAME, since we just assigned)
+        hack_output.push_back("@5");
+        hack_output.push_back("D=D-A");
+        hack_output.push_back("A=D");
+        hack_output.push_back("D=M");
+        hack_output.push_back("@R14");
+        hack_output.push_back("M=D");
+
+        //*ARG = pop()
+        //put pop() into D
+        hack_output.push_back("@SP");
+        hack_output.push_back("D=M");
+        hack_output.push_back("A=D-1");
+        hack_output.push_back("D=M");
+
+        // hack_output.push_back("@R15");
+        // hack_output.push_back("M=D");
+       
+        //put *ARG into A
+        hack_output.push_back("@ARG");
+        hack_output.push_back("A=M");
+
+        //put pop() (in D) into RAM[*ARG]
+        hack_output.push_back("M=D");
+
+        //SP=ARG+1
+        hack_output.push_back("D=A+1");
+        hack_output.push_back("@SP");
+        hack_output.push_back("M=D");
+
+        //THAT = *(FRAME-1)
+        //Put FRAME-1 into A, then save *A(which is M) into D
+        //We saved FRAME in R13
+        hack_output.push_back("@R13");
+        hack_output.push_back("D=M-1"); //FRAME-1
+        hack_output.push_back("A=D");
+        hack_output.push_back("D=M");
+
+        //put D into THAT
+        hack_output.push_back("@THAT");
+        hack_output.push_back("M=D");
+
+        //THIS = *(FRAME-2)
+        hack_output.push_back("@R13");
+        hack_output.push_back("D=M-1"); //FRAME-1
+        hack_output.push_back("D=D-1"); //-2
+        hack_output.push_back("A=D");
+        hack_output.push_back("D=M");
+
+        //put D into THIS
+        hack_output.push_back("@THIS");
+        hack_output.push_back("M=D");
+
+        //ARG = *(FRAME-3)
+        hack_output.push_back("@R13");
+        hack_output.push_back("D=M-1"); //FRAME-1
+        hack_output.push_back("D=D-1"); //-2
+        hack_output.push_back("D=D-1"); //-3
+        hack_output.push_back("A=D");
+        hack_output.push_back("D=M");
+
+        //put D into ARG
+        hack_output.push_back("@ARG");
+        hack_output.push_back("M=D");
+
+        //LCL = *(FRAME-4)
+        hack_output.push_back("@R13");
+        hack_output.push_back("D=M-1"); //FRAME-1
+        hack_output.push_back("D=D-1"); //-2
+        hack_output.push_back("D=D-1"); //-3
+        hack_output.push_back("D=D-1"); //-4
+        hack_output.push_back("A=D");
+        hack_output.push_back("D=M");
+
+        //put D into LCL
+        hack_output.push_back("@LCL");
+        hack_output.push_back("M=D");
+
+        //goto RET
+        //we saved RET in R14, so get that to A and unconditionally jump
+        hack_output.push_back("@R14");
+        hack_output.push_back("A=M");
+        hack_output.push_back("0;JMP");
+        
+    }
 }
 
 void write_bootstrap_code() {
@@ -417,6 +595,14 @@ void write_bootstrap_code() {
 void translate_stripped_input() {
     write_bootstrap_code();
     for(int i = 0; i < current_stripped_input.size(); i++) {
+        //TODO delete this temp pushback
+        string cur_line = "//BEGIN line [ ";
+        for(int j = 0; j < current_stripped_input[i].size(); j++) {
+            cur_line += current_stripped_input[i][j] + " ";
+        }
+        cur_line += "]";
+        hack_output.push_back(cur_line);
+
         const string& command = current_stripped_input[i][0];
         
         //arithmetic commands
@@ -429,12 +615,10 @@ void translate_stripped_input() {
             process_mem_access(command, current_stripped_input[i][1], current_stripped_input[i][2]);
         }
         else if((command == "label") || (command == "goto") || (command == "if-goto")) {
-            //TODO: NOT SUPPORTED YET
-            process_program_flow();
+            process_program_flow(command, current_stripped_input[i][1]);
         }
         else if((command == "function") || (command == "call") || (command == "return")) {
-            //TODO: NOT SUPPORTED YET
-            process_function_calling();
+            process_function_calling(current_stripped_input[i]);
         }
         else {
             cout << "unrecognized command: " << command << endl;
