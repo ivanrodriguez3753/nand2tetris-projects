@@ -14,6 +14,7 @@ vector<string> hack_output;
 ifstream current_ifs;
 int label_counter = 0;
 string current_vm_function = "null";
+string current_vm_file = "null";
 
 map<string, string> seg_to_symbol = {{"local", "LCL"},
                                      {"argument", "ARG"},
@@ -338,10 +339,9 @@ void process_mem_access(const string& command, const string& segment, const stri
         (segment == "this") || 
         (segment == "that") ||
         (segment == "temp") ||
-        (segment == "pointer") ||
-        (segment == "static") ) {
+        (segment == "pointer") ) {
         hack_output.push_back("@" + seg_to_symbol.at(segment));
-        if(segment == "temp" || segment == "pointer" || segment == "static") {
+        if(segment == "temp" || segment == "pointer") {
             hack_output.push_back("D=A");
         }
         else {
@@ -363,6 +363,16 @@ void process_mem_access(const string& command, const string& segment, const stri
         hack_output.push_back("@SP"); 
         hack_output.push_back("A=M"); 
         hack_output.push_back("M=D");  
+    }
+    //each static segment has file scope. so we need to generate a unique symbol for each
+    //static we find. but the assembler automatically allocates it for us, so we can just
+    //spit out @whatever and the first time it encounters it, it'll give us a new RAM 
+    //address starting at 16. See page 171 for details
+    else if(segment == "static") {
+        string file_no_vm_extension = current_vm_file.substr(0, current_vm_file.find(".vm"));
+        string file_no_relative_path = file_no_vm_extension.substr(file_no_vm_extension.find_last_of("/") + 1);
+        hack_output.push_back("@" + file_no_relative_path + "." + index);
+        hack_output.push_back("D=A");
     }
     
 
@@ -662,6 +672,10 @@ void process_function_calling(const vector<string>& line) {
     }
 }
 
+/*I'm not sure if this code is redundant or not. In theory, everything starts at 0,
+  so we could just set SP=261 (since copying over the state will be all 0's), but
+  I went through the trouble of treating it as an actual call translation
+*/
 void write_bootstrap_code() {
     //on page 194, we just have to effect the following operations:
     //SP=256            //Initialize the stack pointer to 0x100
@@ -729,6 +743,7 @@ int main(int argc, char** argv) {
     
     //translate one file at a time
     for(int k = 0; k < vm_files.size(); k++) {
+        current_vm_file = vm_files[k];
         strip_input(vm_files[k]);
         translate_stripped_input();    
     }
